@@ -36,9 +36,9 @@ def init_db():
         if "is_blocked" not in columns:
             cursor.execute("ALTER TABLE users ADD COLUMN is_blocked INTEGER DEFAULT 0")
 
-        cursor.execute("SELECT COUNT(*) FROM users WHERE username = 'FrBola'")
+        cursor.execute("SELECT COUNT(*) FROM users WHERE username = 'admin'")
         if cursor.fetchone()[0] == 0:
-            cursor.execute("INSERT INTO users (username, password, sec_question, sec_answer, role, is_blocked) VALUES ('FrBola', '123456', 'admin', 'فيلوباتير', 'admin', 0)")
+            cursor.execute("INSERT INTO users (username, password, sec_question, sec_answer, role, is_blocked) VALUES ('admin', 'admin123', 'admin', 'admin', 'admin', 0)")
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS products (
@@ -85,6 +85,49 @@ def init_db():
             )
         ''')
 
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS system_state (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS purchases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                item_name TEXT NOT NULL,
+                unit_cost REAL NOT NULL,
+                quantity INTEGER NOT NULL,
+                total_cost REAL NOT NULL,
+                purchase_date TEXT NOT NULL
+            )
+        ''')
+
+        sales_cols = [c[1] for c in cursor.execute("PRAGMA table_info(sales)").fetchall()]
+        if "cost_price" not in sales_cols:
+            cursor.execute("ALTER TABLE sales ADD COLUMN cost_price REAL DEFAULT 0.0")
+
+        # حفظ تكلفة الشراء للبيانات القديمة قدر الإمكان.
+        cursor.execute("""
+            UPDATE sales
+            SET cost_price = COALESCE(
+                (SELECT cost_price FROM products WHERE products.name = sales.item_name), 0
+            )
+            WHERE COALESCE(cost_price, 0) = 0
+        """)
+
+        cursor.execute("SELECT value FROM system_state WHERE key = 'monthly_start'")
+        if cursor.fetchone() is None:
+            month_start = datetime.now().strftime("%Y-%m-01 00:00:00")
+            cursor.execute("INSERT INTO system_state (key, value) VALUES ('monthly_start', ?)", (month_start,))
+
+        cursor.execute("SELECT value FROM system_state WHERE key = 'treasury_balance'")
+        if cursor.fetchone() is None:
+            today = datetime.now().strftime("%Y-%m-%d")
+            cursor.execute("SELECT COALESCE(SUM(total_price), 0) FROM sales WHERE is_reset = 1 OR date(date_time) != date(?)", (today,))
+            initial_treasury = cursor.fetchone()[0] or 0.0
+            cursor.execute("INSERT INTO system_state (key, value) VALUES ('treasury_balance', ?)", (str(initial_treasury),))
+
 init_db()
 
 
@@ -94,8 +137,13 @@ class SupermarketPOSApp(ctk.CTk):
 
         self.title("Supermarket POS")
         
-        # يجعل النافذة تكبر لملء الشاشة بالكامل عند التشغيل
-        self.after(0, lambda: self.wm_state('zoomed'))
+        window_width = 1180
+        window_height = 720
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        center_x = int(screen_width/2 - window_width/2)
+        center_y = int(screen_height/2 - window_height/2)
+        self.geometry(f'{window_width}x{window_height}+{center_x}+{center_y}')
         
         self.configure(fg_color="#CFE2FE")
 
@@ -121,15 +169,16 @@ class SupermarketPOSApp(ctk.CTk):
             widget.destroy()
 
         self.unbind('<Return>')
+        self.geometry("950x640")
         
-        card = ctk.CTkFrame(self, width=400, height=560, corner_radius=25, fg_color="#FFFFFF", border_width=1, border_color="#E5E7EB")
+        card = ctk.CTkFrame(self, width=380, height=540, corner_radius=25, fg_color="#FFFFFF", border_width=1, border_color="#E5E7EB")
         card.place(relx=0.5, rely=0.5, anchor="center")
         card.pack_propagate(False)
 
         self.load_logo(card, image_name="images.jpeg")
 
-        ctk.CTkLabel(card, text="Supermarket POS", font=ctk.CTkFont(family="Helvetica", size=20, weight="bold"), text_color="#111827").pack(pady=(0, 8))
-        ctk.CTkLabel(card, text="أهلاً بك - تسجيل الدخول", font=ctk.CTkFont(family="Helvetica", size=12, weight="bold"), text_color="#374151").pack(anchor="e", padx=45, pady=(0, 4))
+        ctk.CTkLabel(card, text="Supermarket POS", font=ctk.CTkFont(family="Helvetica", size=18, weight="bold"), text_color="#111827").pack(pady=(0, 8))
+        ctk.CTkLabel(card, text="أهلاً بك - تسجيل الدخول", font=ctk.CTkFont(family="Helvetica", size=11, weight="bold"), text_color="#374151").pack(anchor="e", padx=45, pady=(0, 4))
 
         u_box = ctk.CTkFrame(card, fg_color="transparent")
         u_box.pack(fill="x", padx=45, pady=(0, 6))
@@ -155,7 +204,7 @@ class SupermarketPOSApp(ctk.CTk):
 
         self.unbind('<Return>')
 
-        card = ctk.CTkFrame(self, width=400, height=580, corner_radius=25, fg_color="#FFFFFF", border_width=1, border_color="#E5E7EB")
+        card = ctk.CTkFrame(self, width=380, height=560, corner_radius=25, fg_color="#FFFFFF", border_width=1, border_color="#E5E7EB")
         card.place(relx=0.5, rely=0.5, anchor="center")
         card.pack_propagate(False)
 
@@ -185,7 +234,7 @@ class SupermarketPOSApp(ctk.CTk):
 
         self.unbind('<Return>')
 
-        card = ctk.CTkFrame(self, width=400, height=540, corner_radius=25, fg_color="#FFFFFF", border_width=1, border_color="#E5E7EB")
+        card = ctk.CTkFrame(self, width=380, height=520, corner_radius=25, fg_color="#FFFFFF", border_width=1, border_color="#E5E7EB")
         card.place(relx=0.5, rely=0.5, anchor="center")
         card.pack_propagate(False)
 
@@ -213,17 +262,18 @@ class SupermarketPOSApp(ctk.CTk):
         for widget in self.winfo_children():
             widget.destroy()
 
+        self.geometry("1180x720")
         self.configure(fg_color="#D9EBF8")
 
         outer_container = ctk.CTkFrame(self, fg_color="#F0F8FF", corner_radius=15, border_width=0)
-        outer_container.pack(fill="both", expand=True, padx=10, pady=10)
+        outer_container.place(relx=0.5, rely=0.5, anchor="center", relwidth=0.98, relheight=0.96)
 
-        sidebar = ctk.CTkFrame(outer_container, fg_color="#DDEEF9", width=220, corner_radius=0)
+        sidebar = ctk.CTkFrame(outer_container, fg_color="#DDEEF9", width=200, corner_radius=0)
         sidebar.pack(side="left", fill="y")
         sidebar.pack_propagate(False)
 
         role_label = "أدمن" if self.current_user_role == "admin" else "كاشير"
-        ctk.CTkLabel(sidebar, text=f"Supermarket POS  🛒\n({role_label}: {self.current_user})", font=ctk.CTkFont(size=12, weight="bold"), text_color="#1E3A8A").pack(pady=(15, 15), anchor="w", padx=15)
+        ctk.CTkLabel(sidebar, text=f"Supermarket POS  🛒\n({role_label}: {self.current_user})", font=ctk.CTkFont(size=11, weight="bold"), text_color="#1E3A8A").pack(pady=(15, 10), anchor="w", padx=15)
 
         all_nav_items = [
             ("محطة الكاشير POS", "🖥️", self.show_cashier_station, ["admin", "user"]),
@@ -234,6 +284,7 @@ class SupermarketPOSApp(ctk.CTk):
             ("سجلات الفواتير", "📑", self.show_today_invoices, ["admin"]),
             ("إدارة المنتجات", "🛒", self.show_inventory_screen, ["admin"]),
             ("إدارة الخزنة", "💵", self.show_treasury_management, ["admin"]),
+            ("المشتريات", "🛍️", self.show_purchases_screen, ["admin"]),
             ("التدفق النقدي", "💸", self.show_cash_flow, ["admin"]),
             ("التقارير", "📊", self.show_today_revenue_details, ["admin"]),
             ("إعدادات النظام", "⚙️", self.show_system_settings, ["admin"]),
@@ -247,16 +298,16 @@ class SupermarketPOSApp(ctk.CTk):
                 
                 btn = ctk.CTkButton(
                     sidebar, text=f"{text}   {icon}", font=ctk.CTkFont(size=11, weight="bold" if is_active else "normal"),
-                    fg_color=btn_bg, hover_color="#CBD5E1", text_color=txt_color, anchor="e", height=36, corner_radius=6, command=cmd
+                    fg_color=btn_bg, hover_color="#CBD5E1", text_color=txt_color, anchor="e", height=32, corner_radius=6, command=cmd
                 )
-                btn.pack(fill="x", padx=8, pady=2)
+                btn.pack(fill="x", padx=8, pady=1)
 
         logout_btn = ctk.CTkButton(
             sidebar, text="تسجيل الخروج   🚪", font=ctk.CTkFont(size=11, weight="bold"),
-            fg_color="#FEE2E2", hover_color="#FCA5A5", text_color="#991B1B", anchor="e", height=36, corner_radius=6,
+            fg_color="#FEE2E2", hover_color="#FCA5A5", text_color="#991B1B", anchor="e", height=34, corner_radius=6,
             command=self.handle_logout
         )
-        logout_btn.pack(side="bottom", fill="x", padx=8, pady=15)
+        logout_btn.pack(side="bottom", fill="x", padx=8, pady=10)
 
         main_content = ctk.CTkFrame(outer_container, fg_color="#FFFFFF", corner_radius=15)
         main_content.pack(side="right", fill="both", expand=True, padx=10, pady=10)
@@ -291,10 +342,12 @@ class SupermarketPOSApp(ctk.CTk):
         cards_frame.pack(fill="x")
 
         if self.current_user_role == "admin":
+            # ⚡ تم إلغاء الربط والتفاعل لكارت صافي الربح ليصبح للعرض فقط
             cards_data = [
                 ("تنبيه النواقص", str(stats['low_stock']), "⚠️", "#FCE8E6", "#D93025", "#FCA5A5", self.show_stock_status, True, True),
                 ("الخزنة الحالية", f"${stats['treasury']:,.2f}", "💵", "#E6F4EA", "#137333", "#C6E7CE", self.show_treasury_management, False, True),
                 ("صافي الربح اليوم", f"${stats['today_profit']:,.2f}", None, "#E6F4EA", "#137333", "#C6E7CE", None, False, False),
+                ("صافي ربح الشهر", f"${stats['monthly_profit']:,.2f}", "📅", "#E0F2FE", "#0369A1", "#BAE6FD", self.show_monthly_profit_details, False, True),
                 ("إيراد اليوم", f"${stats['today_revenue']:,.2f}", "📊", "#E6F4EA", "#137333", "#C6E7CE", self.show_today_revenue_details, False, True),
                 ("فواتير اليوم", str(stats['today_invoices']), "🧾", "#F8FAFC", "#1E293B", "#CBD5E1", self.show_today_invoices, False, True),
                 ("إجمالي المنتجات", str(stats['total_products']), "🛒", "#E6F4EA", "#137333", "#C6E7CE", self.show_inventory_screen, False, True),
@@ -558,7 +611,7 @@ class SupermarketPOSApp(ctk.CTk):
             btn.grid(row=row, column=col, padx=5, pady=5, sticky="nsew")
             
             col += 1
-            if col > 3:  # زيادة الأعمدة لتناسب الشاشة المكبرة
+            if col > 2:
                 col = 0
                 row += 1
 
@@ -648,28 +701,30 @@ class SupermarketPOSApp(ctk.CTk):
         try:
             with sqlite3.connect(DB_NAME, timeout=10) as conn:
                 cursor = conn.cursor()
+                sale_costs = {}
                 for item in self.cart:
-                    cursor.execute("SELECT stock FROM products WHERE name = ?", (item["name"],))
+                    cursor.execute("SELECT stock, cost_price FROM products WHERE name = ?", (item["name"],))
                     res = cursor.fetchone()
                     if res:
-                        current_stock = res[0]
+                        current_stock, current_cost = res
                         if item["qty"] > current_stock:
                             messagebox.showerror("فشل العملية ❌", f"الكمية غير كافية للمنتج: ({item['name']})\nالمطلوب: {item['qty']} | المتاح بالمخزن: {current_stock}")
                             return
+                        sale_costs[item["name"]] = float(current_cost or 0.0)
                     else:
                         messagebox.showerror("خطأ", f"المنتج ({item['name']}) غير موجود بقاعدة البيانات!")
                         return
 
-                inv_num = f"INV-{datetime.now().strftime('%M%S')}"
+                inv_num = f"INV-{datetime.now().strftime('%M%S%f')[-6:]}"
                 dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
                 sales_data = [
-                    (inv_num, item["name"], item["qty"], item["total"], dt, 0)
+                    (inv_num, item["name"], item["qty"], item["total"], dt, 0, sale_costs.get(item["name"], 0.0))
                     for item in self.cart
                 ]
 
                 cursor.executemany(
-                    "INSERT INTO sales (invoice_num, item_name, quantity, total_price, date_time, is_reset) VALUES (?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO sales (invoice_num, item_name, quantity, total_price, date_time, is_reset, cost_price) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     sales_data
                 )
 
@@ -820,6 +875,7 @@ class SupermarketPOSApp(ctk.CTk):
             messagebox.showinfo("نجاح", "تمت عملية الإرجاع وتحديث المخزون بنجاح!")
             self.search_invoice_for_return()
 
+    # ⚡ تم إلغاء خيار/شريط البحث بالتاريخ وتنظيف الواجهة لعرض كل الفواتير مباشرة
     def show_today_invoices(self):
         if self.current_user_role != "admin": return
         self.create_screen_base("سجلات الفواتير 📑")
@@ -898,7 +954,7 @@ class SupermarketPOSApp(ctk.CTk):
             cursor.execute("""
                 SELECT date(s.date_time) as sale_date, 
                        SUM(s.total_price) as total_revenue,
-                       SUM(s.quantity * (p.price - p.cost_price)) as real_profit
+                       SUM(s.total_price - (s.quantity * COALESCE(s.cost_price, p.cost_price, 0))) as real_profit
                 FROM sales s
                 LEFT JOIN products p ON s.item_name = p.name
                 WHERE strftime('%Y-%m', s.date_time) = ?
@@ -933,47 +989,90 @@ class SupermarketPOSApp(ctk.CTk):
             ctk.CTkLabel(r_frame, text=f"${revenue:,.2f}", font=ctk.CTkFont(size=11), text_color="#0F172A", width=200).pack(side="right", padx=15)
             ctk.CTkLabel(r_frame, text=f"${profit:,.2f}", font=ctk.CTkFont(size=12, weight="bold"), text_color="#10B981", width=200).pack(side="left", padx=15)
 
+    def get_treasury_balance(self):
+        with sqlite3.connect(DB_NAME, timeout=10) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM system_state WHERE key = 'treasury_balance'")
+            row = cursor.fetchone()
+        try:
+            return float(row[0]) if row else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    def set_treasury_balance(self, amount):
+        with sqlite3.connect(DB_NAME, timeout=10) as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT OR REPLACE INTO system_state (key, value) VALUES ('treasury_balance', ?)",
+                           (str(float(amount)),))
+
     def show_treasury_management(self):
-        if self.current_user_role != "admin": return
+        if self.current_user_role != "admin":
+            return
         self.create_screen_base("إدارة الخزنة والترحيل 💵")
-        
         today_date = datetime.now().strftime("%Y-%m-%d")
 
         with sqlite3.connect(DB_NAME, timeout=10) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT SUM(total_price) FROM sales WHERE date(date_time) = date(?) AND is_reset = 0", (today_date,))
-            res_today = cursor.fetchone()
-            today_rev = res_today[0] if res_today[0] else 0.0
+            cursor.execute("SELECT COALESCE(SUM(total_price), 0) FROM sales WHERE date(date_time) = date(?) AND is_reset = 0",
+                           (today_date,))
+            today_rev = cursor.fetchone()[0] or 0.0
 
-            cursor.execute("SELECT SUM(total_price) FROM sales WHERE is_reset = 1 OR date(date_time) != date(?)", (today_date,))
-            res_past = cursor.fetchone()
-            past_rev = res_past[0] if res_past[0] else 0.0
+        treasury_balance = self.get_treasury_balance()
 
-        card = ctk.CTkFrame(self.content_area, fg_color="#FFFFFF", corner_radius=15, border_width=1, border_color="#CBD5E1", width=520, height=340)
+        card = ctk.CTkFrame(self.content_area, fg_color="#FFFFFF", corner_radius=15,
+                            border_width=1, border_color="#CBD5E1", width=560, height=430)
         card.place(relx=0.5, rely=0.4, anchor="center")
         card.pack_propagate(False)
 
-        ctk.CTkLabel(card, text="حالة الخزنة والتدفق النقدي", font=ctk.CTkFont(size=16, weight="bold"), text_color="#0F172A").pack(pady=15)
+        ctk.CTkLabel(card, text="حالة الخزنة والتدفق النقدي",
+                     font=ctk.CTkFont(size=16, weight="bold"), text_color="#0F172A").pack(pady=15)
 
-        p_frame = ctk.CTkFrame(card, fg_color="#F8FAFC", corner_radius=8)
+        p_frame = ctk.CTkFrame(card, fg_color="#E6F4EA", corner_radius=8)
         p_frame.pack(fill="x", padx=30, pady=8)
-        ctk.CTkLabel(p_frame, text="إيرادات الخزنة السابقة المرحّلة:", font=ctk.CTkFont(size=12, weight="bold"), text_color="#334155").pack(side="right", padx=15, pady=10)
-        ctk.CTkLabel(p_frame, text=f"${past_rev:.2f}", font=ctk.CTkFont(size=14, weight="bold"), text_color="#0F172A").pack(side="left", padx=15)
+        ctk.CTkLabel(p_frame, text="رصيد الخزنة الحالي:",
+                     font=ctk.CTkFont(size=12, weight="bold"), text_color="#137333").pack(side="right", padx=15, pady=12)
+        ctk.CTkLabel(p_frame, text=f"${treasury_balance:,.2f}",
+                     font=ctk.CTkFont(size=16, weight="bold"), text_color="#137333").pack(side="left", padx=15)
 
         t_frame = ctk.CTkFrame(card, fg_color="#EFF6FF", corner_radius=8)
         t_frame.pack(fill="x", padx=30, pady=8)
-        ctk.CTkLabel(t_frame, text="إيراد اليوم الحالي المعلق:", font=ctk.CTkFont(size=12, weight="bold"), text_color="#1E293B").pack(side="right", padx=15, pady=10)
-        ctk.CTkLabel(t_frame, text=f"${today_rev:.2f}", font=ctk.CTkFont(size=14, weight="bold"), text_color="#2563EB").pack(side="left", padx=15)
+        ctk.CTkLabel(t_frame, text="إيراد اليوم الحالي المعلق:",
+                     font=ctk.CTkFont(size=12, weight="bold"), text_color="#1E293B").pack(side="right", padx=15, pady=12)
+        ctk.CTkLabel(t_frame, text=f"${today_rev:,.2f}",
+                     font=ctk.CTkFont(size=14, weight="bold"), text_color="#2563EB").pack(side="left", padx=15)
 
-        ctk.CTkButton(card, text="تصفير إيراد اليوم وترحيله إلى الخزنة 🔄", font=ctk.CTkFont(size=12, weight="bold"), fg_color="#DC2626", hover_color="#B91C1C", height=42, command=self.reset_today_revenue).pack(fill="x", padx=30, pady=20)
+        ctk.CTkButton(card, text="تصفير إيراد اليوم وترحيله إلى الخزنة 🔄",
+                      font=ctk.CTkFont(size=12, weight="bold"), fg_color="#DC2626",
+                      hover_color="#B91C1C", height=42, command=self.reset_today_revenue).pack(fill="x", padx=30, pady=(15, 7))
+        ctk.CTkButton(card, text="تصفير الخزنة بالكامل 🧹",
+                      font=ctk.CTkFont(size=12, weight="bold"), fg_color="#7C3AED",
+                      hover_color="#6D28D9", height=42, command=self.reset_treasury).pack(fill="x", padx=30, pady=(7, 15))
+        ctk.CTkLabel(card, text="تصفير الخزنة لا يمسح إيراد اليوم المعلق ولا يحذف سجلات المبيعات.",
+                     font=ctk.CTkFont(size=9), text_color="#64748B").pack(pady=(0, 5))
 
     def reset_today_revenue(self):
-        if messagebox.askyesno("تأكيد التصفير", "هل أنت متأكد من تصفير إيراد اليوم وتحويل كافة المبيعات للحسابات المغلقة بالخزنة؟"):
+        if messagebox.askyesno("تأكيد الترحيل",
+                               "هل أنت متأكد من تصفير إيراد اليوم وتحويله إلى رصيد الخزنة؟"):
             today_date = datetime.now().strftime("%Y-%m-%d")
             with sqlite3.connect(DB_NAME, timeout=10) as conn:
                 cursor = conn.cursor()
-                cursor.execute("UPDATE sales SET is_reset = 1 WHERE date(date_time) = date(?)", (today_date,))
-            messagebox.showinfo("تم بنجاح", "تم تصفير إيراد اليوم بنجاح وتم ترحيل المبالغ للخزنة!")
+                cursor.execute("SELECT COALESCE(SUM(total_price), 0) FROM sales WHERE date(date_time) = date(?) AND is_reset = 0",
+                               (today_date,))
+                today_rev = cursor.fetchone()[0] or 0.0
+                if today_rev > 0:
+                    current_treasury = self.get_treasury_balance()
+                    cursor.execute("INSERT OR REPLACE INTO system_state (key, value) VALUES ('treasury_balance', ?)",
+                                   (str(current_treasury + today_rev),))
+                    cursor.execute("UPDATE sales SET is_reset = 1 WHERE date(date_time) = date(?) AND is_reset = 0",
+                                   (today_date,))
+            messagebox.showinfo("تم بنجاح", f"تم تصفير إيراد اليوم وترحيل ${today_rev:,.2f} إلى الخزنة.")
+            self.show_treasury_management()
+
+    def reset_treasury(self):
+        if messagebox.askyesno("تأكيد تصفير الخزنة",
+                               "سيتم جعل رصيد الخزنة = 0.\nلن يتم حذف المبيعات أو إيراد اليوم المعلق.\n\nهل تريد المتابعة؟"):
+            self.set_treasury_balance(0.0)
+            messagebox.showinfo("تم بنجاح", "تم تصفير الخزنة بالكامل.")
             self.show_treasury_management()
 
     def show_sales_log(self):
@@ -1007,6 +1106,199 @@ class SupermarketPOSApp(ctk.CTk):
             ctk.CTkLabel(f, text=f"الكمية: {qty}", font=ctk.CTkFont(size=11), text_color="#334155", width=80).pack(side="right", padx=10)
             ctk.CTkLabel(f, text=f"${total:.2f}", font=ctk.CTkFont(size=12, weight="bold"), text_color="#10B981").pack(side="left", padx=15)
 
+    # ====================================================
+    # 🛍️ إدارة المشتريات وصافي ربح الشهر
+    # ====================================================
+    def show_purchases_screen(self):
+        if self.current_user_role != "admin":
+            return
+
+        self.create_screen_base("إدارة المشتريات 🛍️")
+
+        top = ctk.CTkFrame(self.content_area, fg_color="#FFFFFF", corner_radius=12, border_width=1, border_color="#CBD5E1")
+        top.pack(fill="x", padx=15, pady=10)
+        ctk.CTkLabel(top, text="إضافة عملية شراء جديدة",
+                     font=ctk.CTkFont(size=15, weight="bold"), text_color="#0F172A").pack(anchor="e", padx=15, pady=(12, 8))
+
+        fields = ctk.CTkFrame(top, fg_color="transparent")
+        fields.pack(fill="x", padx=15, pady=(0, 8))
+        self.purchase_name = ctk.CTkEntry(fields, placeholder_text="اسم المنتج", height=36, justify="right")
+        self.purchase_name.pack(side="right", fill="x", expand=True, padx=4)
+        self.purchase_cost = ctk.CTkEntry(fields, placeholder_text="سعر الشراء للوحدة", height=36, justify="right")
+        self.purchase_cost.pack(side="right", fill="x", expand=True, padx=4)
+        self.purchase_qty = ctk.CTkEntry(fields, placeholder_text="الكمية", height=36, justify="right")
+        self.purchase_qty.pack(side="right", fill="x", expand=True, padx=4)
+
+        ctk.CTkButton(fields, text="تسجيل المشتريات ➕", font=ctk.CTkFont(size=11, weight="bold"),
+                      fg_color="#10B981", hover_color="#059669", height=36, width=150,
+                      command=self.add_purchase).pack(side="left", padx=4)
+
+        summary = ctk.CTkFrame(top, fg_color="#EFF6FF", corner_radius=8)
+        summary.pack(fill="x", padx=15, pady=(0, 12))
+        monthly_profit = self.calculate_monthly_profit()
+        purchases_total = self.get_month_purchases_total()
+        ctk.CTkLabel(summary, text=f"إجمالي مشتريات الشهر: ${purchases_total:,.2f}",
+                     font=ctk.CTkFont(size=12, weight="bold"), text_color="#DC2626").pack(side="right", padx=20, pady=10)
+        ctk.CTkLabel(summary, text=f"صافي ربح الشهر: ${monthly_profit:,.2f}",
+                     font=ctk.CTkFont(size=12, weight="bold"),
+                     text_color="#10B981" if monthly_profit >= 0 else "#DC2626").pack(side="left", padx=20, pady=10)
+        ctk.CTkButton(summary, text="تصفير الشهر والبدء من جديد 🔄",
+                      font=ctk.CTkFont(size=11, weight="bold"),
+                      fg_color="#DC2626", hover_color="#B91C1C", height=32,
+                      command=self.reset_monthly_profit).pack(side="left", padx=10, pady=6)
+
+        ctk.CTkLabel(self.content_area, text="سجل المشتريات",
+                     font=ctk.CTkFont(size=14, weight="bold"), text_color="#0F172A").pack(anchor="e", padx=15, pady=(3, 5))
+        scroll = ctk.CTkScrollableFrame(self.content_area, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=15, pady=(0, 10))
+
+        with sqlite3.connect(DB_NAME, timeout=10) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT item_name, unit_cost, quantity, total_cost, purchase_date FROM purchases ORDER BY id DESC")
+            purchases = cursor.fetchall()
+
+        if not purchases:
+            ctk.CTkLabel(scroll, text="لا توجد مشتريات مسجلة حتى الآن.",
+                         font=ctk.CTkFont(size=13), text_color="#64748B").pack(pady=30)
+            return
+
+        for item_name, unit_cost, qty, total_cost, purchase_date in purchases:
+            row = ctk.CTkFrame(scroll, fg_color="#FFFFFF", height=42, corner_radius=7,
+                               border_width=1, border_color="#CBD5E1")
+            row.pack(fill="x", pady=2)
+            row.pack_propagate(False)
+            ctk.CTkLabel(row, text=item_name, font=ctk.CTkFont(size=11, weight="bold"),
+                         text_color="#0F172A", width=180).pack(side="right", padx=8)
+            ctk.CTkLabel(row, text=f"سعر الوحدة: ${unit_cost:.2f}",
+                         font=ctk.CTkFont(size=10), text_color="#334155", width=130).pack(side="right", padx=8)
+            ctk.CTkLabel(row, text=f"الكمية: {qty}",
+                         font=ctk.CTkFont(size=10), text_color="#334155", width=90).pack(side="right", padx=8)
+            ctk.CTkLabel(row, text=f"الإجمالي: ${total_cost:.2f}",
+                         font=ctk.CTkFont(size=11, weight="bold"), text_color="#DC2626", width=120).pack(side="left", padx=8)
+            ctk.CTkLabel(row, text=purchase_date,
+                         font=ctk.CTkFont(size=10), text_color="#64748B", width=145).pack(side="left", padx=8)
+
+    def add_purchase(self):
+        name = self.purchase_name.get().strip()
+        cost_text = self.purchase_cost.get().strip()
+        qty_text = self.purchase_qty.get().strip()
+        if not name or not cost_text or not qty_text:
+            messagebox.showwarning("تنبيه", "يرجى إدخال اسم المنتج وسعر الشراء والكمية.")
+            return
+
+        try:
+            unit_cost = float(cost_text)
+            qty = int(qty_text)
+            if unit_cost < 0 or qty <= 0:
+                raise ValueError
+            total_cost = unit_cost * qty
+            purchase_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            with sqlite3.connect(DB_NAME, timeout=10) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT id, stock, cost_price FROM products WHERE name = ?", (name,))
+                product = cursor.fetchone()
+                if not product:
+                    messagebox.showwarning("المنتج غير موجود",
+                                           "المنتج غير موجود في إدارة المنتجات. أضفه أولاً ثم سجّل المشتريات.")
+                    return
+
+                product_id, old_stock, old_cost = product
+                old_stock = int(old_stock or 0)
+                old_cost = float(old_cost or 0.0)
+                new_stock = old_stock + qty
+                weighted_cost = ((old_stock * old_cost) + (qty * unit_cost)) / new_stock
+                cursor.execute("UPDATE products SET stock = ?, cost_price = ? WHERE id = ?",
+                               (new_stock, weighted_cost, product_id))
+                cursor.execute("INSERT INTO purchases (item_name, unit_cost, quantity, total_cost, purchase_date) VALUES (?, ?, ?, ?, ?)",
+                               (name, unit_cost, qty, total_cost, purchase_date))
+
+            messagebox.showinfo("تم بنجاح",
+                                f"تم تسجيل الشراء بقيمة ${total_cost:.2f}.\n"
+                                "تمت إضافة الكمية للمخزون وخصم التكلفة من صافي ربح الشهر.")
+            self.purchase_name.delete(0, "end")
+            self.purchase_cost.delete(0, "end")
+            self.purchase_qty.delete(0, "end")
+            self.show_purchases_screen()
+        except ValueError:
+            messagebox.showerror("خطأ", "سعر الشراء رقم صحيح، والكمية عدد صحيح أكبر من صفر.")
+        except Exception as e:
+            messagebox.showerror("خطأ", f"تعذر تسجيل المشتريات: {e}")
+
+    def get_monthly_start(self):
+        with sqlite3.connect(DB_NAME, timeout=10) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM system_state WHERE key = 'monthly_start'")
+            row = cursor.fetchone()
+        return row[0] if row and row[0] else datetime.now().strftime("%Y-%m-01 00:00:00")
+
+    def calculate_monthly_sales_profit(self):
+        monthly_start = self.get_monthly_start()
+        with sqlite3.connect(DB_NAME, timeout=10) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COALESCE(SUM(s.total_price - (s.quantity * COALESCE(s.cost_price, p.cost_price, 0))), 0) FROM sales s LEFT JOIN products p ON s.item_name = p.name WHERE datetime(s.date_time) >= datetime(?)",
+                           (monthly_start,))
+            return float(cursor.fetchone()[0] or 0.0)
+
+    def get_month_purchases_total(self):
+        monthly_start = self.get_monthly_start()
+        with sqlite3.connect(DB_NAME, timeout=10) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COALESCE(SUM(total_cost), 0) FROM purchases WHERE datetime(purchase_date) >= datetime(?)",
+                           (monthly_start,))
+            return float(cursor.fetchone()[0] or 0.0)
+
+    def calculate_monthly_profit(self):
+        return self.calculate_monthly_sales_profit() - self.get_month_purchases_total()
+
+    def show_monthly_profit_details(self):
+        if self.current_user_role != "admin":
+            return
+        self.create_screen_base("صافي ربح الشهر 📅💰")
+        monthly_start = self.get_monthly_start()
+        sales_profit = self.calculate_monthly_sales_profit()
+        purchases = self.get_month_purchases_total()
+        net_profit = sales_profit - purchases
+
+        card = ctk.CTkFrame(self.content_area, fg_color="#FFFFFF", corner_radius=15,
+                            border_width=1, border_color="#CBD5E1", width=620, height=360)
+        card.place(relx=0.5, rely=0.42, anchor="center")
+        card.pack_propagate(False)
+        ctk.CTkLabel(card, text="ملخص صافي ربح دورة الشهر",
+                     font=ctk.CTkFont(size=18, weight="bold"), text_color="#0F172A").pack(pady=(20, 8))
+        ctk.CTkLabel(card, text=f"بداية الدورة الحالية: {monthly_start}",
+                     font=ctk.CTkFont(size=10), text_color="#64748B").pack(pady=(0, 15))
+
+        def row(title, value, color):
+            frame = ctk.CTkFrame(card, fg_color="#F8FAFC", corner_radius=8)
+            frame.pack(fill="x", padx=35, pady=5)
+            ctk.CTkLabel(frame, text=title, font=ctk.CTkFont(size=12, weight="bold"),
+                         text_color="#334155").pack(side="right", padx=15, pady=9)
+            ctk.CTkLabel(frame, text=f"${value:,.2f}", font=ctk.CTkFont(size=13, weight="bold"),
+                         text_color=color).pack(side="left", padx=15)
+
+        row("أرباح المبيعات قبل المشتريات:", sales_profit, "#10B981")
+        row("إجمالي المشتريات:", purchases, "#DC2626")
+        row("صافي الربح بعد خصم المشتريات:", net_profit, "#10B981" if net_profit >= 0 else "#DC2626")
+        ctk.CTkButton(card, text="تصفير الشهر والبدء من جديد 🔄",
+                      font=ctk.CTkFont(size=12, weight="bold"),
+                      fg_color="#DC2626", hover_color="#B91C1C", height=40,
+                      command=self.reset_monthly_profit).pack(fill="x", padx=35, pady=15)
+
+    def reset_monthly_profit(self):
+        if self.current_user_role != "admin":
+            return
+        if messagebox.askyesno("تأكيد تصفير الشهر",
+                               "سيتم بدء دورة ربح جديدة من الآن.\n"
+                               "لن يتم حذف المبيعات أو المشتريات القديمة من السجل.\n\n"
+                               "هل تريد المتابعة؟"):
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with sqlite3.connect(DB_NAME, timeout=10) as conn:
+                cursor = conn.cursor()
+                cursor.execute("INSERT OR REPLACE INTO system_state (key, value) VALUES ('monthly_start', ?)", (now,))
+            messagebox.showinfo("تم بنجاح", "تم تصفير صافي ربح الشهر وبدء دورة جديدة.")
+            self.show_monthly_profit_details()
+
     def show_cash_flow(self):
         if self.current_user_role != "admin": return
         self.create_screen_base("تقرير التدفق النقدي 💸")
@@ -1017,6 +1309,8 @@ class SupermarketPOSApp(ctk.CTk):
             res = cursor.fetchone()
             total_sales_sum = res[0] if res[0] else 0.0
             total_invoices_cnt = res[1] if res[1] else 0
+            treasury_balance = self.get_treasury_balance()
+            monthly_purchases = self.get_month_purchases_total()
 
         avg_ticket = (total_sales_sum / total_invoices_cnt) if total_invoices_cnt > 0 else 0.0
 
@@ -1040,6 +1334,16 @@ class SupermarketPOSApp(ctk.CTk):
         f3.pack(fill="x", padx=25, pady=6)
         ctk.CTkLabel(f3, text="متوسط قيمة الفاتورة الواحدة:", font=ctk.CTkFont(size=12, weight="bold"), text_color="#334155").pack(side="right", padx=15, pady=8)
         ctk.CTkLabel(f3, text=f"${avg_ticket:.2f}", font=ctk.CTkFont(size=13, weight="bold"), text_color="#7C3AED").pack(side="left", padx=15)
+
+        f4 = ctk.CTkFrame(card, fg_color="#F8FAFC", corner_radius=8)
+        f4.pack(fill="x", padx=25, pady=6)
+        ctk.CTkLabel(f4, text="رصيد الخزنة الحالي:", font=ctk.CTkFont(size=12, weight="bold"), text_color="#334155").pack(side="right", padx=15, pady=8)
+        ctk.CTkLabel(f4, text=f"${treasury_balance:,.2f}", font=ctk.CTkFont(size=13, weight="bold"), text_color="#137333").pack(side="left", padx=15)
+
+        f5 = ctk.CTkFrame(card, fg_color="#F8FAFC", corner_radius=8)
+        f5.pack(fill="x", padx=25, pady=6)
+        ctk.CTkLabel(f5, text="مشتريات دورة الشهر الحالية:", font=ctk.CTkFont(size=12, weight="bold"), text_color="#334155").pack(side="right", padx=15, pady=8)
+        ctk.CTkLabel(f5, text=f"${monthly_purchases:,.2f}", font=ctk.CTkFont(size=13, weight="bold"), text_color="#DC2626").pack(side="left", padx=15)
 
     def show_system_settings(self):
         if self.current_user_role != "admin": return
@@ -1067,7 +1371,7 @@ class SupermarketPOSApp(ctk.CTk):
         left_frame = ctk.CTkFrame(self.content_area, fg_color="#FFFFFF", corner_radius=10, border_width=1, border_color="#CBD5E1")
         left_frame.pack(side="left", fill="both", expand=True, padx=(10, 5), pady=10)
 
-        right_frame = ctk.CTkFrame(self.content_area, fg_color="#F8FAFC", width=340, corner_radius=10, border_width=1, border_color="#CBD5E1")
+        right_frame = ctk.CTkFrame(self.content_area, fg_color="#F8FAFC", width=320, corner_radius=10, border_width=1, border_color="#CBD5E1")
         right_frame.pack(side="right", fill="y", padx=(5, 10), pady=10)
         right_frame.pack_propagate(False)
 
@@ -1289,40 +1593,28 @@ class SupermarketPOSApp(ctk.CTk):
     def get_live_statistics(self):
         with sqlite3.connect(DB_NAME, timeout=10) as conn:
             cursor = conn.cursor()
-
             cursor.execute("SELECT COUNT(*) FROM products")
             total_products = cursor.fetchone()[0]
-
             cursor.execute("SELECT COUNT(*) FROM products WHERE stock <= 5")
             low_stock = cursor.fetchone()[0]
 
             today_date = datetime.now().strftime("%Y-%m-%d")
-            cursor.execute("SELECT COUNT(DISTINCT invoice_num), SUM(total_price) FROM sales WHERE date(date_time) = date(?) AND is_reset = 0", (today_date,))
+            cursor.execute("SELECT COUNT(DISTINCT invoice_num), COALESCE(SUM(total_price), 0) FROM sales WHERE date(date_time) = date(?) AND is_reset = 0",
+                           (today_date,))
             today_data = cursor.fetchone()
 
-            cursor.execute("SELECT SUM(total_price) FROM sales WHERE is_reset = 1 OR date(date_time) != date(?)", (today_date,))
-            past_treasury = cursor.fetchone()[0]
-
-            cursor.execute("""
-                SELECT SUM(s.quantity * (p.price - p.cost_price))
-                FROM sales s
-                LEFT JOIN products p ON s.item_name = p.name
-                WHERE date(s.date_time) = date(?) AND s.is_reset = 0
-            """, (today_date,))
-            res_profit = cursor.fetchone()
-            today_profit = res_profit[0] if res_profit[0] else 0.0
-
-        today_invoices = today_data[0] if today_data[0] else 0
-        today_revenue = today_data[1] if today_data[1] else 0.0
-        treasury = (past_treasury if past_treasury else 0.0)
+            cursor.execute("SELECT COALESCE(SUM(s.total_price - (s.quantity * COALESCE(s.cost_price, p.cost_price, 0))), 0) FROM sales s LEFT JOIN products p ON s.item_name = p.name WHERE date(s.date_time) = date(?) AND s.is_reset = 0",
+                           (today_date,))
+            today_profit = cursor.fetchone()[0] or 0.0
 
         return {
             "total_products": total_products,
             "low_stock": low_stock,
-            "today_invoices": today_invoices,
-            "today_revenue": today_revenue,
-            "today_profit": today_profit,
-            "treasury": treasury
+            "today_invoices": today_data[0] or 0,
+            "today_revenue": today_data[1] or 0.0,
+            "today_profit": float(today_profit),
+            "monthly_profit": float(self.calculate_monthly_profit()),
+            "treasury": float(self.get_treasury_balance())
         }
 
     def get_recent_sales(self):
@@ -1337,7 +1629,7 @@ class SupermarketPOSApp(ctk.CTk):
             widget.destroy()
 
         main_box = ctk.CTkFrame(self, fg_color="#FFFFFF", corner_radius=15, border_width=1, border_color="#CBD5E1")
-        main_box.pack(fill="both", expand=True, padx=10, pady=10)
+        main_box.place(relx=0.5, rely=0.5, anchor="center", relwidth=0.96, relheight=0.94)
 
         header = ctk.CTkFrame(main_box, fg_color="#BAE6FD", corner_radius=10, height=55)
         header.pack(fill="x", padx=15, pady=10)
